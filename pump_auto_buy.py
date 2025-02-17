@@ -1,22 +1,51 @@
 import os
 import time
+import sys
 import json
 import tkinter as tk
 from tkinter import ttk, messagebox
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.wait import WebDriverWait
+from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.service import Service
-
-CONFIG_FILE = "pump_settings.json"
 
 class PumpAutoBuyApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Pump Auto Buy")
-        self.root.geometry("420x280")  # 增加窗口高度
+        self.driver = None  # 添加driver作为类属性
+        
+        # 获取可执行文件所在目录
+        if getattr(sys, 'frozen', False):
+            # 如果是打包后的exe运行
+            self.app_dir = os.path.dirname(sys.executable)
+        else:
+            # 如果是python脚本运行
+            self.app_dir = os.path.dirname(os.path.abspath(__file__))
+            
+        # 设置配置文件路径
+        self.config_file = os.path.join(self.app_dir, "settings.json")
+        
+        # 确保配置文件存在
+        if not os.path.exists(self.config_file):
+            with open(self.config_file, "w") as f:
+                json.dump({}, f)
+        
+        # 设置窗口在屏幕中央
+        # 获取屏幕宽度和高度
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        
+        # 计算窗口位置
+        window_width = 420
+        window_height = 280
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 2
+        
+        # 设置窗口位置
+        self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
         
         # 设置窗口样式
         style = ttk.Style()
@@ -29,17 +58,17 @@ class PumpAutoBuyApp:
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # 合约地址输入
-        ttk.Label(main_frame, text="代币合约地址:").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(main_frame, text="Token Contract Address:").grid(row=0, column=0, sticky=tk.W)
         self.contract_entry = ttk.Entry(main_frame, width=40)
         self.contract_entry.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E))
         
         # SOL数量输入
-        ttk.Label(main_frame, text="购买SOL数量:").grid(row=2, column=0, sticky=tk.W)
+        ttk.Label(main_frame, text="SOL Amount:").grid(row=2, column=0, sticky=tk.W)
         self.sol_amount_entry = ttk.Entry(main_frame, width=40)
         self.sol_amount_entry.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E))
         
         # 开始按钮
-        ttk.Button(main_frame, text="开始自动购买", command=self.start_auto_buy).grid(row=4, column=0, columnspan=2, pady=20)
+        ttk.Button(main_frame, text="Start Auto Buy", command=self.start_auto_buy).grid(row=4, column=0, columnspan=2, pady=20)
         
         # 状态标签
         self.status_label = ttk.Label(main_frame, text="")
@@ -55,36 +84,38 @@ class PumpAutoBuyApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
     def load_settings(self):
-        """加载保存的设置"""
+        """从配置文件加载设置"""
         try:
-            if os.path.exists(CONFIG_FILE):
-                with open(CONFIG_FILE, 'r') as f:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, "r") as f:
                     settings = json.load(f)
-                    self.contract_entry.insert(0, settings.get('contract_address', ''))
-                    self.sol_amount_entry.insert(0, settings.get('sol_amount', '3'))
-            else:
-                # 如果配置文件不存在，使用默认值
-                self.sol_amount_entry.insert(0, '3')
+                self.contract_entry.insert(0, settings.get("contract_address", ""))
+                self.sol_amount_entry.insert(0, settings.get("sol_amount", ""))
+                print(f"Settings loaded from {self.config_file}")
         except Exception as e:
-            print(f"加载设置时出错: {e}")
-            # 使用默认值
-            self.sol_amount_entry.insert(0, '3')
+            print(f"Error loading settings: {e}")
             
     def save_settings(self):
-        """保存当前设置"""
+        """保存设置到配置文件"""
         try:
             settings = {
-                'contract_address': self.contract_entry.get().strip(),
-                'sol_amount': self.sol_amount_entry.get().strip()
+                "contract_address": self.contract_entry.get().strip(),
+                "sol_amount": self.sol_amount_entry.get().strip()
             }
-            with open(CONFIG_FILE, 'w') as f:
-                json.dump(settings, f, indent=4)
+            with open(self.config_file, "w") as f:
+                json.dump(settings, f)
+            print(f"Settings saved to {self.config_file}")
         except Exception as e:
-            print(f"保存设置时出错: {e}")
+            print(f"Error saving settings: {e}")
             
     def on_closing(self):
-        """窗口关闭时保存设置"""
+        """窗口关闭时保存设置并关闭浏览器"""
         self.save_settings()
+        if self.driver:
+            try:
+                self.driver.quit()
+            except:
+                pass
         self.root.destroy()
         
     def update_status(self, message):
@@ -97,11 +128,11 @@ class PumpAutoBuyApp:
         try:
             amount = float(amount_str)
             if amount <= 0:
-                raise ValueError("SOL数量必须大于0")
+                raise ValueError("SOL amount must be greater than 0")
             return True, amount
         except ValueError as e:
             return False, str(e)
-        
+            
     def start_auto_buy(self):
         """开始自动购买流程"""
         contract_address = self.contract_entry.get().strip()
@@ -109,48 +140,49 @@ class PumpAutoBuyApp:
         
         # 验证输入
         if not contract_address:
-            messagebox.showerror("错误", "请输入代币合约地址")
+            messagebox.showerror("Error", "Please enter token contract address")
             return
             
         is_valid, result = self.validate_sol_amount(sol_amount)
         if not is_valid:
-            messagebox.showerror("错误", f"SOL数量无效: {result}")
+            messagebox.showerror("Error", f"Invalid SOL amount: {result}")
             return
             
-        self.update_status("正在启动浏览器...")
+        self.update_status("Launching browser...")
         self.root.update()
         
         try:
+            # 如果已经有浏览器实例在运行，先关闭它
+            if self.driver:
+                try:
+                    self.driver.quit()
+                except:
+                    pass
+            
             # 打开浏览器
-            driver = open_chrome("https://pump.fun")
+            self.driver = open_chrome("https://pump.fun")
             
             # 处理初始弹窗
-            self.update_status("处理初始弹窗...")
-            if not handle_initial_popup(driver):
-                print("没有点击弹窗，需要请自己处理")
-                # driver.quit()
-                # self.update_status("初始弹窗处理失败")
-                # return
+            self.update_status("Handling initial popup...")
+            if not handle_initial_popup(self.driver):
+                print("No popup found, please handle manually if needed")
                 
             # 等待钱包连接
-            self.update_status("请在浏览器中连接钱包...")
-            if not wait_for_wallet_connection(driver):
-                driver.quit()
-                self.update_status("钱包连接失败")
+            self.update_status("Please connect your wallet in the browser...")
+            if not wait_for_wallet_connection(self.driver):
+                self.update_status("Wallet connection failed")
                 return
                 
             # 执行购买
-            self.update_status("正在执行购买...")
-            if auto_buy_token(driver, contract_address, result):
-                self.update_status("购买操作已完成")
+            self.update_status("Executing purchase...")
+            if auto_buy_token(self.driver, contract_address, result):
+                self.update_status("Purchase completed")
             else:
-                self.update_status("购买操作失败")
+                self.update_status("Purchase failed")
                 
         except Exception as e:
-            self.update_status(f"发生错误: {str(e)}")
-            if driver:
-                driver.quit()
-                
+            self.update_status(f"Error occurred: {str(e)}")
+            
     def run(self):
         """运行应用"""
         self.root.mainloop()
@@ -167,6 +199,17 @@ def handle_initial_popup(driver):
         # 等待页面加载完成
         time.sleep(2)
         
+        # 处理 Cookie 设置
+        try:
+            accept_button = WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.XPATH, "//*[@id='btn-accept-all']"))
+            )
+            accept_button.click()
+            print("Accepted cookie settings")
+            time.sleep(1)
+        except:
+            print("No cookie settings found, continuing")
+        
         # 处理 I'm ready to pump 弹窗
         selectors = [
             "//div[@role='dialog']//button",        # 通过对话框中的按钮
@@ -178,52 +221,43 @@ def handle_initial_popup(driver):
                 ready_button = WebDriverWait(driver, 3).until(
                     EC.element_to_be_clickable((By.XPATH, selector))
                 )
-                print(f"找到按钮，使用选择器: {selector}")
+                print(f"Found button using selector: {selector}")
                 break
             except:
                 continue
                 
         if ready_button:
             ready_button.click()
-            print("已确认初始弹窗")
-            # return True
+            print("Confirmed initial popup")
+            return True
         else:
-            print("未找到弹窗按钮")
-            # return False
+            print("No popup button found")
+            return False
             
-        # 处理 Cookie 设置
-        try:
-            accept_button = WebDriverWait(driver, 5).until(
-                EC.element_to_be_clickable((By.XPATH, "//*[@id='btn-accept-all']"))
-            )
-            accept_button.click()
-            print("已接受Cookie设置")
-            time.sleep(1)
-        except:
-            print("没有找到Cookie设置按钮，继续执行")
-
-        return True
     except Exception as e:
-        print(f"处理初始弹窗时发生错误: {e}")
+        print(f"Error handling initial popup: {e}")
         return False
 
 def wait_for_wallet_connection(driver):
     """等待用户连接钱包并确认连接成功"""
     try:
+        # 设置等待时间为1天（24小时 = 86400秒）
+        wait = WebDriverWait(driver, 86400)
+        
         # 等待连接钱包按钮出现并可点击
-        connect_button = WebDriverWait(driver, 300).until(
+        connect_button = wait.until(
             EC.presence_of_element_located((By.XPATH, "/html/body/nav/div[2]/button"))
         )
-        print("请连接钱包...")
+        print("Please connect your wallet...")
         
         # 等待钱包连接成功（通过检查 view profile 文字是否出现）
-        WebDriverWait(driver, 300).until(
+        wait.until(
             EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'view profile')]"))
         )
-        print("钱包连接成功！")
+        print("Wallet connected successfully!")
         return True
     except Exception as e:
-        print(f"等待钱包连接超时或发生错误: {e}")
+        print(f"Wallet connection timeout or error: {e}")
         return False
 
 def search_and_select_token(driver, contract_address):
@@ -251,24 +285,24 @@ def search_and_select_token(driver, contract_address):
                 EC.element_to_be_clickable((By.XPATH, "//main//div[contains(@class, 'grid')]//a[1]/div"))
             )
             first_result.click()
-            print("已选择代币")
+            print("Token selected")
             return True
         except Exception as e:
-            print(f"未找到搜索结果: {e}")
+            print(f"No search results found: {e}")
             # 尝试备用选择器
             try:
                 first_result = WebDriverWait(driver, 5).until(
                     EC.element_to_be_clickable((By.XPATH, "//main//div[contains(@class, 'overflow-hidden')]//a[1]/div"))
                 )
                 first_result.click()
-                print("使用备用选择器选择代币成功")
+                print("Token selected using backup selector")
                 return True
             except:
-                print("备用选择器也未找到结果")
+                print("No results found with backup selector")
                 return False
             
     except Exception as e:
-        print(f"搜索代币时发生错误: {e}")
+        print(f"Error searching for token: {e}")
         return False
 
 def auto_buy_token(driver, contract_address, sol_amount):
@@ -282,7 +316,7 @@ def auto_buy_token(driver, contract_address, sol_amount):
             
         # 等待SOL输入框可用
         sol_input = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, "//input[@type='number']"))
+            EC.presence_of_element_located((By.XPATH, "//*[@id='amount']"))
         )
         sol_input.clear()  # 清除默认值
         sol_input.send_keys(str(sol_amount))  # 输入SOL数量
@@ -290,14 +324,14 @@ def auto_buy_token(driver, contract_address, sol_amount):
         
         # 等待并点击购买按钮
         buy_button = WebDriverWait(driver, 10).until(
-            EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Buy')]"))
+            EC.element_to_be_clickable((By.XPATH, "/html/body/main/div/div[1]/div[2]/div/div/div[5]"))
         )
         buy_button.click()
         
-        print("已发起购买交易")
+        print("Purchase initiated")
         return True
     except Exception as e:
-        print(f"购买过程中发生错误: {e}")
+        print(f"Error during purchase: {e}")
         return False
 
 if __name__ == "__main__":
