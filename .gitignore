@@ -40,6 +40,7 @@ dist/
 build/
 *.manifest
 *.spec
+chrome_data/
 
 # 单元测试覆盖率报告
 htmlcov/
