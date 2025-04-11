@@ -24,12 +24,12 @@
     "3": {
         "debug_port": 9225,
         "user_data_dir": "/Users/chenk/Documents/code/python/BitgetHelper/chrome_data/user_3",
-        "created_at": "2025-04-11 17:54:18",
-        "last_used": "2025-04-11 17:54:18",
+        "created_at": "2025-04-11 18:32:40",
+        "last_used": "2025-04-11 18:32:40",
         "note": "3",
         "position": {
-            "x": 50,
-            "y": 1750,
+            "x": 2550,
+            "y": 50,
             "width": 1200,
             "height": 800
         },

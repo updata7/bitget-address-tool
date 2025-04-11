@@ -73,68 +73,80 @@ class ChromeSessionManager:
         debug_port = 9222 + int(session_id)
         chrome_options.add_argument(f"--remote-debugging-port={debug_port}")
         
-        # 基本选项
+        # 添加性能优化选项
         chrome_options.add_argument('--no-sandbox')
+        chrome_options.add_argument('--disable-dev-shm-usage')
+        chrome_options.add_argument('--disable-gpu')
+        chrome_options.add_argument('--enable-extensions')
+        chrome_options.add_argument('--disable-web-security')
+        chrome_options.add_argument('--disable-site-isolation-trials')
+        chrome_options.page_load_strategy = 'none'
         
-        try:
-            driver = webdriver.Chrome(
-                service=Service(ChromeDriverManager().install()),
-                options=chrome_options
-            )
-            
-            # 设置窗口大小和位置
-            window_width = 1200
-            window_height = 800
-            screen_padding = 50  # 屏幕边缘留白
-            
-            # 计算每行可以放置的窗口数量（考虑屏幕宽度）
-            screen_size = driver.execute_script("""
-                return {
-                    width: window.screen.availWidth,
-                    height: window.screen.availHeight
-                };
-            """)
-            
-            max_windows_per_row = max(1, (screen_size['width'] - screen_padding) // (window_width + screen_padding))
-            
-            # 计算窗口位置
-            session_num = int(session_id)
-            row = (session_num - 1) // max_windows_per_row
-            col = (session_num - 1) % max_windows_per_row
-            
-            x_offset = screen_padding + col * (window_width + screen_padding)
-            y_offset = screen_padding + row * (window_height + screen_padding)
-            
-            # 设置窗口大小和位置
-            driver.set_window_size(window_width, window_height)
-            driver.set_window_position(x_offset, y_offset)
-            
-            # 设置窗口标题
-            title = f"Chrome_{session_id}"
-            if note:
-                title += f" ({note})"
-            driver.execute_script(f"document.title = '{title}'")
-            
-            # 保存会话信息
-            self.sessions[session_id] = {
-                "debug_port": debug_port,
-                "user_data_dir": user_data_dir,
-                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "last_used": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "note": note,
-                "position": {
-                    "x": x_offset,
-                    "y": y_offset,
-                    "width": window_width,
-                    "height": window_height
+        # 最多重试3次
+        for attempt in range(3):
+            try:
+                service = Service(ChromeDriverManager().install())
+                service.start()  # 显式启动服务
+                
+                driver = webdriver.Chrome(
+                    service=service,
+                    options=chrome_options
+                )
+                
+                # 设置窗口大小和位置
+                window_width = 1200
+                window_height = 800
+                screen_padding = 50
+                
+                # 计算窗口位置
+                session_num = int(session_id)
+                x_offset = screen_padding + ((session_num - 1) % 3) * (window_width + screen_padding)
+                y_offset = screen_padding + ((session_num - 1) // 3) * (window_height + screen_padding)
+                
+                # 设置窗口大小和位置
+                driver.set_window_size(window_width, window_height)
+                driver.set_window_position(x_offset, y_offset)
+                
+                # 设置窗口标题
+                title = f"Chrome_{session_id}"
+                if note:
+                    title += f" ({note})"
+                driver.execute_script(f"document.title = '{title}'")
+                
+                # 保存会话信息
+                self.sessions[session_id] = {
+                    "debug_port": debug_port,
+                    "user_data_dir": user_data_dir,
+                    "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "last_used": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "note": note,
+                    "position": {
+                        "x": x_offset,
+                        "y": y_offset,
+                        "width": window_width,
+                        "height": window_height
+                    }
                 }
-            }
-            self._save_sessions()
-            
-            return session_id, driver
-        except Exception as e:
-            print(f"创建新会话失败: {e}")
-            return None, None
+                self._save_sessions()
+                
+                return session_id, driver
+                
+            except Exception as e:
+                print(f"创建会话尝试 {attempt + 1}/3 失败: {e}")
+                try:
+                    if 'driver' in locals():
+                        driver.quit()
+                    if 'service' in locals():
+                        service.stop()
+                except:
+                    pass
+                
+                if attempt < 2:  # 如果不是最后一次尝试
+                    print("等待5秒后重试...")
+                    time.sleep(5)
+                else:
+                    print("创建新会话失败，已达到最大重试次数")
+                    return None, None
 
     def _create_single_session_thread(self, session_id, note=None):
         """在线程中创建单个会话"""
@@ -302,12 +314,24 @@ class ChromeSessionManager:
     def _do_task(self, session_id, driver):
         """执行任务"""
         try:
-            driver.set_page_load_timeout(10)
-            driver.get("https://pump.fun")
+            # 增加页面加载超时时间
+            driver.set_page_load_timeout(30)
+            driver.set_script_timeout(30)
+            
+            try:
+                driver.get("https://pump.fun")
+            except TimeoutException:
+                print(f"会话 {session_id} 页面加载超时，继续执行...")
+            except Exception as e:
+                print(f"会话 {session_id} 页面加载出错: {e}")
+            
             note = self.sessions[session_id].get('note', '')
             print(f"会话 {session_id} {f'({note})' if note else ''} 开始执行任务")
 
-            # 最多尝试20次，每次间隔0.1秒
+            # 等待页面加载完成
+            time.sleep(3)  # 添加固定等待时间
+
+            # 最多尝试20次，每次间隔0.5秒
             for i in range(20):
                 try:
                     # 尝试找到搜索框
@@ -317,6 +341,8 @@ class ChromeSessionManager:
                         search_box.send_keys("CRAMvzDsSpXYsFpcoDr6vFLJMBeftez1E7277xwPpump")
                         print(f"会话 {session_id} 输入完成")
                         
+                        time.sleep(0.5)  # 添加短暂延迟
+                        
                         # 尝试找到并点击按钮
                         button = driver.find_element(By.CSS_SELECTOR, 'form button:nth-child(2)')
                         if button:
@@ -325,7 +351,7 @@ class ChromeSessionManager:
                             return session_id, driver
                         
                 except:
-                    time.sleep(0.1)
+                    time.sleep(0.5)  # 增加等待时间
                     continue
             
             print(f"会话 {session_id} 未找到元素")
@@ -333,7 +359,7 @@ class ChromeSessionManager:
             
         except Exception as e:
             print(f"会话 {session_id} 执行任务时出错: {e}")
-            raise
+            return session_id, driver  # 返回driver而不是抛出异常
 
     def _restore_single_session_thread(self, session_id):
         """在线程中恢复单个会话"""
@@ -402,7 +428,7 @@ class ChromeSessionManager:
         return None
 
     def clone_extensions(self, from_session_id, to_session_id):
-        """复制一个会话的插件到另一个会话"""
+        """复制插件和必要的配置"""
         if from_session_id not in self.sessions:
             print(f"源会话 {from_session_id} 不存在")
             return False
@@ -416,23 +442,20 @@ class ChromeSessionManager:
         to_user_data = self.sessions[to_session_id]['user_data_dir']
         
         try:
-            # 确保目标目录存在
-            os.makedirs(to_user_data, exist_ok=True)
+            # 确保目标Default目录存在
+            os.makedirs(os.path.join(to_user_data, 'Default'), exist_ok=True)
             
-            # 需要复制的目录和文件列表
-            items_to_copy = [
-                'Default/Extensions',          # 插件目录
-                'Default/Local Extension Settings',  # 插件设置
-                'Default/Sync Extension Settings',   # 同步设置
-                'Default/Extension Rules',          # 插件规则
-                'Default/Extension Scripts',        # 插件脚本
-                'Default/Extension State',          # 插件状态
-                'Local State'                       # Chrome状态文件
+            # 1. 复制必要的文件和目录
+            files_to_copy = [
+                ('Default/Extensions', True),           # 插件目录 (是目录)
+                ('Default/Preferences', False),         # 用户偏好
+                ('Default/Secure Preferences', False),  # 安全偏好
+                ('Local State', False),                # Chrome状态
             ]
             
-            for item in items_to_copy:
-                from_path = os.path.join(from_user_data, item)
-                to_path = os.path.join(to_user_data, item)
+            for (path, is_dir) in files_to_copy:
+                from_path = os.path.join(from_user_data, path)
+                to_path = os.path.join(to_user_data, path)
                 
                 if os.path.exists(from_path):
                     # 确保目标目录存在
@@ -440,43 +463,65 @@ class ChromeSessionManager:
                     
                     # 如果目标已存在，先删除
                     if os.path.exists(to_path):
-                        if os.path.isdir(to_path):
+                        if is_dir:
                             shutil.rmtree(to_path)
                         else:
                             os.remove(to_path)
                     
-                    # 复制目录或文件
-                    if os.path.isdir(from_path):
+                    # 复制文件或目录
+                    if is_dir:
                         shutil.copytree(from_path, to_path)
                     else:
                         shutil.copy2(from_path, to_path)
-                    print(f"成功复制: {item}")
+                    print(f"成功复制: {path}")
             
-            # 复制 Preferences 文件，但只复制插件相关的部分
-            from_prefs = os.path.join(from_user_data, 'Default', 'Preferences')
-            to_prefs = os.path.join(to_user_data, 'Default', 'Preferences')
+            # 2. 修改配置文件中的路径
+            files_to_update = ['Preferences', 'Secure Preferences']
+            for file_name in files_to_update:
+                file_path = os.path.join(to_user_data, 'Default', file_name)
+                if os.path.exists(file_path):
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        
+                        # 更新扩展路径
+                        if 'extensions' in data:
+                            # 保持扩展的启用状态
+                            extensions_settings = data['extensions'].get('settings', {})
+                            for ext_id, ext_data in extensions_settings.items():
+                                if 'path' in ext_data:
+                                    ext_data['path'] = ext_data['path'].replace(
+                                        f"user_{from_session_id}",
+                                        f"user_{to_session_id}"
+                                    )
+                        
+                        # 保存修改后的文件
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            json.dump(data, f, indent=2)
+                        print(f"成功更新 {file_name}")
+                        
+                    except Exception as e:
+                        print(f"更新 {file_name} 时出错: {e}")
             
-            if os.path.exists(from_prefs):
+            # 3. 更新 Local State 文件
+            local_state_path = os.path.join(to_user_data, 'Local State')
+            if os.path.exists(local_state_path):
                 try:
-                    with open(from_prefs, 'r', encoding='utf-8') as f:
-                        prefs = json.load(f)
+                    with open(local_state_path, 'r', encoding='utf-8') as f:
+                        state = json.load(f)
                     
-                    # 只保留插件相关的设置
-                    extension_settings = {
-                        'extensions': prefs.get('extensions', {}),
-                        'profile': {
-                            'extensions': prefs.get('profile', {}).get('extensions', {})
-                        }
-                    }
+                    # 更新扩展路径
+                    if 'extensions' in state:
+                        state['extensions']['settings'] = {}  # 清空旧设置
+                        state['extensions']['install_signature'] = {}  # 清空安装签名
                     
-                    # 保存到目标文件
-                    os.makedirs(os.path.dirname(to_prefs), exist_ok=True)
-                    with open(to_prefs, 'w', encoding='utf-8') as f:
-                        json.dump(extension_settings, f, indent=2)
-                    print("成功复制插件配置")
+                    # 保存修改后的文件
+                    with open(local_state_path, 'w', encoding='utf-8') as f:
+                        json.dump(state, f, indent=2)
+                    print("成功更新 Local State")
                     
                 except Exception as e:
-                    print(f"复制配置文件时出错: {e}")
+                    print(f"更新 Local State 时出错: {e}")
             
             return True
         except Exception as e:
@@ -529,14 +574,12 @@ class ChromeSessionManager:
 
     def clear_session(self, session_id):
         """清除指定会话的进程和本地数据"""
-        if session_id not in self.sessions:
-            print(f"会话 {session_id} 不存在")
-            return False
-        
-        session_info = self.sessions[session_id]
         success = True
+        session_info = None
         
-        try:
+        # 获取会话信息（如果存在）
+        if session_id in self.sessions:
+            session_info = self.sessions[session_id]
             # 1. 关闭进程
             if 'pid' in session_info:
                 try:
@@ -544,9 +587,10 @@ class ChromeSessionManager:
                         os.system(f'kill -9 {session_info["pid"]}')
                 except:
                     pass
-            
-            # 2. 删除用户数据目录
-            user_data_dir = session_info['user_data_dir']
+        
+        try:
+            # 2. 删除用户数据目录（无论会话是否存在）
+            user_data_dir = os.path.abspath(f"chrome_data/user_{session_id}")
             if os.path.exists(user_data_dir):
                 try:
                     shutil.rmtree(user_data_dir)
@@ -555,10 +599,13 @@ class ChromeSessionManager:
                     print(f"删除用户数据目录时出错: {e}")
                     success = False
             
-            # 3. 从sessions中移除
-            del self.sessions[session_id]
-            self._save_sessions()
-            print(f"已从会话列表中移除会话 {session_id}")
+            # 3. 从sessions中移除（如果存在）
+            if session_id in self.sessions:
+                del self.sessions[session_id]
+                self._save_sessions()
+                print(f"已从会话列表中移除会话 {session_id}")
+            else:
+                print(f"会话 {session_id} 不存在于会话列表中，仅清理数据")
             
             return success
         except Exception as e:
